@@ -1,11 +1,10 @@
-use std::process::Command;
 use std::fs;
 
 use base64;
 use hex::FromHexError;
 use futures::future;
-use async_std::task;
 use snafu::{ Snafu, ResultExt, ensure };
+use tokio::process::Command;
 use clap::{
     Arg, app_from_crate,
     crate_authors, crate_description,
@@ -28,8 +27,25 @@ enum Error {
     InsufficiendChars
 }
 
-fn xor_slice(a: &[u8], b: &[u8]) -> Vec<u8> {
-    a.iter().zip(b).map(|(a, b)| a ^ b).collect::<Vec<u8>>()
+struct CmdOracle<'a> {
+    cmd: &'a str,
+    args: &'a [&'a str]
+}
+
+impl<'a> CmdOracle<'a> {
+    pub fn new(cmd: &'a str, args: &'a [&'a str]) -> Self {
+        CmdOracle { cmd, args }
+    }
+
+    pub async fn request(&self, payload: &[u8]) -> Result<bool> {
+        Command::new(self.cmd)
+            .args(self.args)
+            .arg(base64::encode(payload))
+            .status()
+            .await
+            .context(BrokenOracle {})
+            .map(|r| r.success())
+    }
 }
 
 #[derive(Debug)]
@@ -53,34 +69,28 @@ impl Dec {
 type Result<T, E = Error> = std::result::Result<T, E>;
 type DecResult = Result<Dec>;
 
-fn cmd_oracle(payload: &[u8], cmd: &str, args: &[&str]) -> Result<bool> {
-    Ok(Command::new(cmd)
-        .args(args)
-        .arg(base64::encode(payload))
-        .status()
-        .context(BrokenOracle {})?
-        .success())
-}
-
-async fn decrypt_intermediate<F>(blk: &[u8], last: &[u8], oracle: F, chars: [u8; 256]) -> Result<Vec<u8>>
-    where F: Fn(&[u8]) -> Result<bool> {
+async fn decrypt_intermediate<'a>(blk: &[u8],
+                                  last: &[u8],
+                                  oracle: &CmdOracle<'a>,
+                                  chars: [u8; 256]) -> Result<Vec<u8>> {
     let blksz = blk.len();
     let mut intermediate = vec![0; blksz];
     let mut payload = vec![0; blksz * 2];
     payload[blksz..].copy_from_slice(blk);
-    let mut last_byte = 0;
+    let mut prio = chars.to_vec();
     for i in (0..blksz).rev() {
         let pad = (blksz - i) as u8;
         (i +1..blksz).rev().for_each(|j| payload[j] = pad ^ intermediate[j]);
 
         let mut took = 0;
         // TODO predict based on all last chars
-        payload[i] = last_byte ^ (last[i] ^ pad);
-        if oracle(&payload)? { took = 1 }
-        else {
-            for (j, b) in chars.iter().enumerate() {
-                payload[i] = *b ^ (last[i] ^ pad);
-                if oracle(&payload)? { took = j; last_byte = *b; break; }
+        let prio_tmp = prio.to_vec();
+        for (j, b) in prio_tmp.iter().enumerate() {
+            payload[i] = b ^ (last[i] ^ pad);
+            if oracle.request(&payload).await? {
+                prio.remove(j);
+                prio.insert(0, *b);
+                took = j; break;
             }
         }
         println!("oracle took {} tries", took);
@@ -91,16 +101,16 @@ async fn decrypt_intermediate<F>(blk: &[u8], last: &[u8], oracle: F, chars: [u8;
     Ok(intermediate)
 }
 
-async fn decrypt<F>(cipher: &[u8], blksz: usize, oracle: F, chars: [u8; 256])
-    -> Result<Vec<DecResult>>
-    where F: Fn(&[u8]) -> Result<bool> {
-    let oracleref = &oracle;
+async fn decrypt<'a>(cipher: &[u8],
+                     blksz: usize,
+                     oracle: &CmdOracle<'a>,
+                     chars: [u8; 256]) -> Result<Vec<DecResult>> {
     let blocks = cipher.chunks(blksz).collect::<Vec<&[u8]>>();
     let i = future::join_all(blocks
         .iter()
         .skip(1)
         .zip(blocks[0..blocks.len() -1].iter())
-        .map(|(blk1, blk2)| decrypt_intermediate(blk1, blk2, oracleref, chars)))
+        .map(|(blk1, blk2)| decrypt_intermediate(blk1, blk2, oracle, chars)))
         .await;
 
     Ok(blocks
@@ -113,7 +123,10 @@ async fn decrypt<F>(cipher: &[u8], blksz: usize, oracle: F, chars: [u8; 256])
 fn parse_chars(file: &str) -> Result<[u8; 256]> {
     let chars = fs::read_to_string(file)
         .context(CharLoad { file: file.to_string() })?
+        .trim()
         .replace(' ', "");
+
+    println!("{}", chars);
     let res = hex::decode(chars)
         .context(HexParse { field: "chars" })?;
     let mut out = [0; 256];
@@ -122,7 +135,8 @@ fn parse_chars(file: &str) -> Result<[u8; 256]> {
     Ok(out)
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = app_from_crate!()
         .arg(Arg::with_name("cipher")
             .short("c").long("cipher").required(true).takes_value(true).index(1)
@@ -135,9 +149,9 @@ fn main() {
              .help("CBC block size"))
         .arg(Arg::with_name("chars")
              .long("chars").takes_value(true).default_value("english.chars")
-             .long_help(concat!("collon seperated list of hex encoded bytes to guess the plaintext. ",
+             .long_help(concat!("space seperated list of hex encoded bytes to guess the plaintext. ",
                                 "ALL 256 POSSIBLE BYTES MUST BE PRESENT in no particular order. ",
-                                "example: 00:01:02 ... 61:62:63 ... 6A:6B ... FF:FF")))
+                                "example: 00 01 02 ... 61 62 63 ... 6A 6B ... FF FF")))
         .arg(Arg::with_name("oracle")
              .long("oracle").short("o").required(true).takes_value(true).index(2).multiple(true)
              .long_help(concat!("the command to run as an oracle. ",
@@ -165,7 +179,8 @@ fn main() {
     let cmd = oracle.next().unwrap();
     let cmd_args = oracle.collect::<Vec<&str>>();
 
-    for dec in task::block_on(decrypt(&cipher, blksz, |p| cmd_oracle(p, cmd, &cmd_args), chars)).unwrap() {
+    let oracle = CmdOracle::new(cmd, &cmd_args);
+    for dec in decrypt(&cipher, blksz, &oracle, chars).await.unwrap() {
         println!("{:?}", dec.unwrap());
     }
 }
