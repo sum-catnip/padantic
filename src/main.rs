@@ -1,4 +1,6 @@
 use std::fs;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use base64;
 use hex::FromHexError;
@@ -66,35 +68,68 @@ impl Dec {
     }
 }
 
+struct PrioQueue (Arc<Mutex<Vec<u8>>>);
+impl PrioQueue {
+    pub fn new(init: Vec<u8>) -> Self {
+        PrioQueue (Arc::new(Mutex::new(init)))
+    }
+
+    pub fn prio(&self, byte: u8) {
+        let mut q = self.0.lock().unwrap();
+        let i = q.iter().position(|b| byte == *b).unwrap();
+        q.remove(i);
+        q.insert(0, byte);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = u8> {
+        let q = self.0.lock().unwrap();
+        q.clone().into_iter()
+    }
+}
+
 type Result<T, E = Error> = std::result::Result<T, E>;
 type DecResult = Result<Dec>;
+
+/*async fn decrypt_pad<'a>(payload: &mut [u8], last: &[u8], oracle: &CmdOracle<'a>) -> Result<u8> {
+    let blksz = payload.len() / 2;
+    let last_last = last[blksz -1];
+    for b in 1..blksz +1 {
+        payload[blksz -1] = b as u8 ^ last_last;
+            if oracle.request(&payload).await? {
+                for i in (blksz -1) - b..blksz {
+                    payload[
+                }
+                return Ok(b)
+            }
+    }
+    Err(Error::BraveOracle {})
+}*/
 
 async fn decrypt_intermediate<'a>(blk: &[u8],
                                   last: &[u8],
                                   oracle: &CmdOracle<'a>,
-                                  chars: [u8; 256]) -> Result<Vec<u8>> {
+                                  chars: &PrioQueue,
+                                  is_last: bool) -> Result<Vec<u8>> {
     let blksz = blk.len();
     let mut intermediate = vec![0; blksz];
     let mut payload = vec![0; blksz * 2];
     payload[blksz..].copy_from_slice(blk);
-    let mut prio = chars.to_vec();
     for i in (0..blksz).rev() {
         let pad = (blksz - i) as u8;
         (i +1..blksz).rev().for_each(|j| payload[j] = pad ^ intermediate[j]);
 
         let mut took = 0;
-        // TODO predict based on all last chars
-        let prio_tmp = prio.to_vec();
-        for (j, b) in prio_tmp.iter().enumerate() {
-            payload[i] = b ^ (last[i] ^ pad);
+        for (j, b) in chars.iter().enumerate() {
+            payload[i] = b ^ (pad ^ last[i]);
+            println!("guess: {:?} / {}", std::str::from_utf8(&vec![b]), b);
             if oracle.request(&payload).await? {
-                prio.remove(j);
-                prio.insert(0, *b);
-                took = j; break;
+                took = j;
+                chars.prio(b);
+                break;
             }
         }
         println!("oracle took {} tries", took);
-        ensure!(took != chars.len(), BraveOracle);
+        ensure!(took != 255, BraveOracle);
         intermediate[i] = payload[i] ^ pad;
     }
 
@@ -106,11 +141,12 @@ async fn decrypt<'a>(cipher: &[u8],
                      oracle: &CmdOracle<'a>,
                      chars: [u8; 256]) -> Result<Vec<DecResult>> {
     let blocks = cipher.chunks(blksz).collect::<Vec<&[u8]>>();
+    let chars  = PrioQueue::new(chars.to_vec());
     let i = future::join_all(blocks
         .iter()
         .skip(1)
         .zip(blocks[0..blocks.len() -1].iter())
-        .map(|(blk1, blk2)| decrypt_intermediate(blk1, blk2, oracle, chars)))
+        .map(|(blk1, blk2)| decrypt_intermediate(blk1, blk2, oracle, &chars, blk1 == blocks.last().unwrap())))
         .await;
 
     Ok(blocks
@@ -149,7 +185,7 @@ async fn main() {
              .help("CBC block size"))
         .arg(Arg::with_name("chars")
              .long("chars").takes_value(true).default_value("english.chars")
-             .long_help(concat!("space seperated list of hex encoded bytes to guess the plaintext. ",
+             .long_help(concat!("(space seperated) list of hex encoded bytes to guess the plaintext. ",
                                 "ALL 256 POSSIBLE BYTES MUST BE PRESENT in no particular order. ",
                                 "example: 00 01 02 ... 61 62 63 ... 6A 6B ... FF FF")))
         .arg(Arg::with_name("oracle")
