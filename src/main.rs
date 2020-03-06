@@ -1,6 +1,7 @@
 use std::fs;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::collections::HashMap;
 
 use base64;
 use hex::FromHexError;
@@ -57,103 +58,106 @@ struct Dec {
 }
 
 impl Dec {
-    pub fn new(cipher: &[u8], intermediate: Vec<u8>) -> Self {
-        let plain = cipher
-            .iter()
-            .zip(&intermediate)
-            .map(|(c, i)| c ^ i)
-            .collect();
-
+    pub fn new(intermediate: Vec<u8>, plain: Vec<u8>) -> Self {
         Dec { intermediate, plain }
     }
 }
 
-struct PrioQueue (Arc<Mutex<Vec<u8>>>);
+#[derive(Debug)]
+struct PrioQueue (Mutex<HashMap<u8, usize>>);
 impl PrioQueue {
     pub fn new(init: Vec<u8>) -> Self {
-        PrioQueue (Arc::new(Mutex::new(init)))
+        PrioQueue (Mutex::new(init
+            .iter()
+            .rev()
+            .enumerate()
+            .map(|(i, b)| (*b, i))
+            .collect()))
     }
 
-    pub fn prio(&self, byte: u8) {
+    pub fn hit(&self, byte: u8) {
         let mut q = self.0.lock().unwrap();
-        let i = q.iter().position(|b| byte == *b).unwrap();
-        q.remove(i);
-        q.insert(0, byte);
+        let new = q[&byte] +5;
+        q.insert(byte, new);
     }
 
     pub fn iter(&self) -> impl Iterator<Item = u8> {
         let q = self.0.lock().unwrap();
-        q.clone().into_iter()
+        let mut tmp = q.clone().into_iter().collect::<Vec<_>>();
+        tmp.sort_by(|x, y| y.1.cmp(&x.1));
+        tmp.into_iter().map(|(k, _)| k)
     }
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 type DecResult = Result<Dec>;
 
-/*async fn decrypt_pad<'a>(payload: &mut [u8], last: &[u8], oracle: &CmdOracle<'a>) -> Result<u8> {
-    let blksz = payload.len() / 2;
-    let last_last = last[blksz -1];
-    for b in 1..blksz +1 {
-        payload[blksz -1] = b as u8 ^ last_last;
-            if oracle.request(&payload).await? {
-                for i in (blksz -1) - b..blksz {
-                    payload[
-                }
-                return Ok(b)
-            }
-    }
-    Err(Error::BraveOracle {})
-}*/
-
 async fn decrypt_intermediate<'a>(blk: &[u8],
                                   last: &[u8],
                                   oracle: &CmdOracle<'a>,
                                   chars: &PrioQueue,
-                                  is_last: bool) -> Result<Vec<u8>> {
+                                  is_last: bool) -> DecResult {
     let blksz = blk.len();
     let mut intermediate = vec![0; blksz];
+    let mut plain = vec![0u8; blksz];
     let mut payload = vec![0; blksz * 2];
     payload[blksz..].copy_from_slice(blk);
-    for i in (0..blksz).rev() {
+    let mut end = 0;
+    // figure out last byte and use it to skip decrypting the padding
+    // TODO this code is fucking disgusting and i should feel ashamed of myself
+    if is_last {
+        for b in 1..blksz +1 {
+            payload[blksz -1] = b as u8 ^ (1 ^ last[blksz -1]);
+            println!("trying pad {}", b);
+            if oracle.request(&payload).await? {
+                println!("found pad byte: {}", b);
+                for i in blksz - b .. blksz {
+                    intermediate[i] = b as u8 ^ last[i];
+                    plain[i] = b as u8;
+                }
+                end = b;
+                break;
+            }
+        }
+    }
+    for i in (0..blksz - end).rev() {
         let pad = (blksz - i) as u8;
         (i +1..blksz).rev().for_each(|j| payload[j] = pad ^ intermediate[j]);
 
         let mut took = 0;
         for (j, b) in chars.iter().enumerate() {
             payload[i] = b ^ (pad ^ last[i]);
-            println!("guess: {:?} / {}", std::str::from_utf8(&vec![b]), b);
+            //println!("guess: {:?} / {}", std::str::from_utf8(&vec![b]), b);
             if oracle.request(&payload).await? {
+                intermediate[i] = b ^ last[i];
+                plain[i] = b;
                 took = j;
-                chars.prio(b);
+                chars.hit(b);
                 break;
             }
         }
         println!("oracle took {} tries", took);
         ensure!(took != 255, BraveOracle);
-        intermediate[i] = payload[i] ^ pad;
     }
-
-    Ok(intermediate)
+    Ok(Dec::new(intermediate, plain))
 }
 
 async fn decrypt<'a>(cipher: &[u8],
                      blksz: usize,
                      oracle: &CmdOracle<'a>,
-                     chars: [u8; 256]) -> Result<Vec<DecResult>> {
+                     chars: [u8; 256]) -> Vec<DecResult> {
     let blocks = cipher.chunks(blksz).collect::<Vec<&[u8]>>();
     let chars  = PrioQueue::new(chars.to_vec());
-    let i = future::join_all(blocks
+    println!("sorted prio: {:?}", chars.iter().collect::<Vec<u8>>());
+    let res = future::join_all(blocks
         .iter()
         .skip(1)
         .zip(blocks[0..blocks.len() -1].iter())
         .map(|(blk1, blk2)| decrypt_intermediate(blk1, blk2, oracle, &chars, blk1 == blocks.last().unwrap())))
         .await;
 
-    Ok(blocks
-       .iter()
-       .zip(i)
-       .map(|(c, i)| i.map(|i| Dec::new(c, i) ))
-       .collect())
+    println!("{:x?}", chars.iter().collect::<Vec<u8>>());
+    res
 }
 
 fn parse_chars(file: &str) -> Result<[u8; 256]> {
@@ -216,7 +220,7 @@ async fn main() {
     let cmd_args = oracle.collect::<Vec<&str>>();
 
     let oracle = CmdOracle::new(cmd, &cmd_args);
-    for dec in decrypt(&cipher, blksz, &oracle, chars).await.unwrap() {
+    for dec in decrypt(&cipher, blksz, &oracle, chars).await {
         println!("{:?}", dec.unwrap());
     }
 }
