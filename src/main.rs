@@ -1,13 +1,22 @@
+use std::io;
+use std::io::Write;
 use std::fs;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::collections::HashMap;
+use std::sync::mpsc;
+use std::sync::mpsc::Sender;
+use std::thread;
 
 use base64;
 use hex::FromHexError;
 use futures::future;
 use snafu::{ Snafu, ResultExt, ensure };
 use tokio::process::Command;
+use crossterm::{ event, terminal };
+use tui::Terminal;
+use tui::backend::CrosstermBackend;
+use tui::widgets::{ Text, Paragraph, Widget };
+use tui::layout::Alignment;
 use clap::{
     Arg, app_from_crate,
     crate_authors, crate_description,
@@ -92,10 +101,12 @@ impl PrioQueue {
 type Result<T, E = Error> = std::result::Result<T, E>;
 type DecResult = Result<Dec>;
 
-async fn decrypt_intermediate<'a>(blk: &[u8],
+async fn decrypt_blk<'a>(blk: &[u8],
                                   last: &[u8],
                                   oracle: &CmdOracle<'a>,
                                   chars: &PrioQueue,
+                                  prog: &Sender<Messages>,
+                                  block: usize,
                                   is_last: bool) -> DecResult {
     let blksz = blk.len();
     let mut intermediate = vec![0; blksz];
@@ -103,14 +114,13 @@ async fn decrypt_intermediate<'a>(blk: &[u8],
     let mut payload = vec![0; blksz * 2];
     payload[blksz..].copy_from_slice(blk);
     let mut end = 0;
-    // figure out last byte and use it to skip decrypting the padding
     // TODO this code is fucking disgusting and i should feel ashamed of myself
     if is_last {
         for b in 1..blksz +1 {
             payload[blksz -1] = b as u8 ^ (1 ^ last[blksz -1]);
-            println!("trying pad {}", b);
+            //println!("trying pad {}", b);
             if oracle.request(&payload).await? {
-                println!("found pad byte: {}", b);
+                //println!("found pad byte: {}", b);
                 for i in blksz - b .. blksz {
                     intermediate[i] = b as u8 ^ last[i];
                     plain[i] = b as u8;
@@ -127,7 +137,8 @@ async fn decrypt_intermediate<'a>(blk: &[u8],
         let mut took = 0;
         for (j, b) in chars.iter().enumerate() {
             payload[i] = b ^ (pad ^ last[i]);
-            //println!("guess: {:?} / {}", std::str::from_utf8(&vec![b]), b);
+            prog.send(Messages::Prog(ProgressMsg::new(payload[0..blksz].to_vec(), i as u8, block)))
+                .unwrap();
             if oracle.request(&payload).await? {
                 intermediate[i] = b ^ last[i];
                 plain[i] = b;
@@ -136,27 +147,38 @@ async fn decrypt_intermediate<'a>(blk: &[u8],
                 break;
             }
         }
-        println!("oracle took {} tries", took);
+        //println!("oracle took {} tries", took);
         ensure!(took != 255, BraveOracle);
     }
+    prog.send(Messages::Done()).unwrap();
     Ok(Dec::new(intermediate, plain))
 }
 
 async fn decrypt<'a>(cipher: &[u8],
                      blksz: usize,
                      oracle: &CmdOracle<'a>,
-                     chars: [u8; 256]) -> Vec<DecResult> {
-    let blocks = cipher.chunks(blksz).collect::<Vec<&[u8]>>();
+                     prog: Sender<Messages>,
+                     chars: [u8; 256],
+                     iv: bool) -> Vec<DecResult> {
+    let mut blocks = cipher.chunks(blksz).collect::<Vec<&[u8]>>();
+    let ivblk: Vec<u8>;
+    if !iv {
+        ivblk = vec![0; blksz];
+        blocks.insert(0, &ivblk);
+    }
+
     let chars  = PrioQueue::new(chars.to_vec());
-    println!("sorted prio: {:?}", chars.iter().collect::<Vec<u8>>());
+    // println!("sorted prio: {:?}", chars.iter().collect::<Vec<u8>>());
     let res = future::join_all(blocks
         .iter()
         .skip(1)
         .zip(blocks[0..blocks.len() -1].iter())
-        .map(|(blk1, blk2)| decrypt_intermediate(blk1, blk2, oracle, &chars, blk1 == blocks.last().unwrap())))
+        .enumerate()
+        .map(|(i, (blk1, blk2))| decrypt_blk(blk1, blk2, oracle, &chars, &prog, i,
+                                             i == blocks.len() -2 && iv)))
         .await;
 
-    println!("{:x?}", chars.iter().collect::<Vec<u8>>());
+    //println!("{:x?}", chars.iter().collect::<Vec<u8>>());
     res
 }
 
@@ -166,13 +188,34 @@ fn parse_chars(file: &str) -> Result<[u8; 256]> {
         .trim()
         .replace(' ', "");
 
-    println!("{}", chars);
+    //println!("{}", chars);
     let res = hex::decode(chars)
         .context(HexParse { field: "chars" })?;
     let mut out = [0; 256];
     ensure!(res.len() == out.len(), InsufficiendChars);
     out.copy_from_slice(&res);
     Ok(out)
+}
+
+struct ProgressMsg {
+    payload: Vec<u8>,
+    index: u8,
+    block: usize
+}
+
+impl ProgressMsg {
+    pub fn new(payload: Vec<u8>, index: u8, block: usize) -> Self {
+        ProgressMsg { payload, index, block }
+    }
+
+    pub fn payload(&self) -> &Vec<u8> { &self.payload }
+    pub fn index(&self) -> u8 { self.index }
+    pub fn block(&self) -> usize { self.block }
+}
+
+enum Messages {
+    Prog(ProgressMsg),
+    Done()
 }
 
 #[tokio::main]
@@ -200,7 +243,7 @@ async fn main() {
                                 "arguments after cmd argument will be prepended BEFORE payload")))
         .get_matches();
 
-    let mut cipher = hex::decode(args.value_of("cipher").unwrap())
+    let cipher = hex::decode(args.value_of("cipher").unwrap())
         .context(HexParse { field: "cipher" })
         .unwrap();
 
@@ -209,18 +252,52 @@ async fn main() {
     let blksz: usize = args.value_of("size").unwrap().parse()
         .expect("invalid value for `size`");
 
-    if args.is_present("noiv") {
-        let mut tmp = vec![0; blksz];
-        tmp.extend(cipher);
-        cipher = tmp;
-    }
+    let iv = !args.is_present("noiv");
 
     let mut oracle = args.values_of("oracle").unwrap();
     let cmd = oracle.next().unwrap();
     let cmd_args = oracle.collect::<Vec<&str>>();
 
     let oracle = CmdOracle::new(cmd, &cmd_args);
-    for dec in decrypt(&cipher, blksz, &oracle, chars).await {
+    terminal::enable_raw_mode().unwrap();
+    let stdout = std::io::stdout();
+    // crossterm::execute!(stdout, terminal::EnterAlternateScreen).unwrap();
+    let backend = CrosstermBackend::new(stdout);
+    let mut term = Terminal::new(backend).unwrap();
+    term.hide_cursor().unwrap();
+    term.clear().unwrap();
+    
+    let (tx, rx) = mpsc::channel::<Messages>();
+    let t = thread::spawn(move || {
+        let mut blocks = HashMap::<usize, ProgressMsg>::new();
+        let mut text: Vec<Text> = Vec::new();
+        loop {
+            if let Ok(msg) = rx.try_recv() {
+                match msg {
+                    Messages::Done() => break,
+                    Messages::Prog(p) => { blocks.insert(p.block(), p); }
+                }
+                text = blocks
+                    .values()
+                    .map(|p| {
+                        let mut hex = hex::encode(p.payload());
+                        hex.push('\n');
+                        Text::raw(hex)
+                    })
+                    .collect();
+            }
+            term.draw(|mut f| {
+                let size = f.size();
+                Paragraph::new(text.iter())
+                    .alignment(Alignment::Center)
+                    .render(&mut f, size);
+            }).unwrap();
+        }
+    });
+
+    for dec in decrypt(&cipher, blksz, &oracle, tx, chars, iv).await {
         println!("{:?}", dec.unwrap());
     }
+
+    t.join().unwrap();
 }
