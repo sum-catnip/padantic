@@ -19,6 +19,15 @@ pub struct Options {
     oracle_args: Vec<String>
 }
 
+impl Options {
+    pub fn oracle(&self) -> &String { &self.oracle }
+    pub fn cipher(&self) -> &[u8] { &self.cipher }
+    pub fn iv(&self) -> bool { self.iv }
+    pub fn size(&self) -> u8 { self.size }
+    pub fn chars(&self) -> &[u8; 256] { &self.chars }
+    pub fn oracle_args(&self) -> &Vec<String> { &self.oracle_args }
+}
+
 fn parse_chars(file: &str) -> Result<[u8; 256]> {
     let chars = fs::read_to_string(file)
         .context(CharLoad { file: file.to_string() })?

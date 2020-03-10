@@ -6,7 +6,7 @@ mod crypt;
 mod cli;
 
 use error::Result;
-use oracle::CmdOracle;
+use oracle::{ CmdOracle, CmdOracleCtx };
 use prio::PrioQueue;
 
 use msg::{ ProgressMsg, Messages };
@@ -23,9 +23,9 @@ use tui::backend::CrosstermBackend;
 use tui::widgets::{ Text, Paragraph, Widget };
 use tui::layout::Alignment;
 
-#[tokio::main]
-async fn main() {
-    let oracle = CmdOracle::new(cmd, &cmd_args);
+fn main() {
+    let opt = cli::parse();
+    let oracle = CmdOracleCtx::new(opt.oracle().to_owned(), opt.oracle_args().to_owned());
     terminal::enable_raw_mode().unwrap();
     let stdout = std::io::stdout();
     // crossterm::execute!(stdout, terminal::EnterAlternateScreen).unwrap();
@@ -62,7 +62,7 @@ async fn main() {
         }
     });
 
-    for dec in decrypt(&cipher, blksz, &oracle, tx, chars, iv).await {
+    for dec in crypt::decrypt(opt.cipher(), opt.size(), &oracle, tx, opt.chars(), opt.iv()) {
         println!("{:?}", dec.unwrap());
     }
 
