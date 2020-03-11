@@ -1,12 +1,10 @@
-use std::process::{ Command, Stdio, Child };
+use std::process::{ Command, Stdio, Child, ChildStdin, ChildStdout };
+use std::io::{ Read, Write, BufReader, BufRead, BufWriter };
 use std::ffi::OsStr;
 use std::thread;
-use std::io::Read;
-use std::io::Write;
-use std::io::BufReader;
-use std::io::BufRead;
 
 use snafu::{ Snafu, ResultExt, ensure };
+use base64;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug, Snafu)]
@@ -32,18 +30,23 @@ impl CmdOracleCtx {
     }
 }
 
-pub struct CmdOracle( Child );
+pub struct CmdOracle{
+    child: Child,
+    writer: BufWriter<ChildStdin>,
+    reader: BufReader<ChildStdout>
+}
+
 impl CmdOracle {
     fn new(ctx: &CmdOracleCtx) -> Result<Self> {
-        let child = CmdOracle(Command::new(&ctx.cmd)
+        let mut child = Command::new(&ctx.cmd)
             .args(&ctx.args)
             .stdout(Stdio::piped())
             .stdin(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .context(BrokenIO)?
-        );
+            .context(BrokenIO)?;
 
+        let err = child.stderr.take().unwrap();
         thread::spawn(|| {
             BufReader::new(err).lines()
                 .for_each(|l| log::error!("stderr: {}", l.unwrap()));
@@ -51,30 +54,25 @@ impl CmdOracle {
             log::debug!("stderr thread exit");
         });
 
-        Ok(child)
+        let writer = BufWriter::new(child.stdin.take().unwrap());
+        let reader = BufReader::new(child.stdout.take().unwrap());
+        Ok(CmdOracle { child, writer, reader })
     }
 
-    pub fn request(&self, payload: &[u8]) -> Result<bool> {
-        self.0.stdin.unwrap().write_all(payload)
-            .context(BrokenIO);
-        self.0.stdin.unwrap().write(&['\n' as u8])
-            .context(BrokenIO);
-        self.0.stdin.unwrap().flush()
-            .context(BrokenIO);
+    pub fn request(&mut self, payload: &[u8]) -> Result<bool> {
+        self.writer.write_all(base64::encode(payload).as_bytes()).context(BrokenIO)?;
+        self.writer.write(&['\n' as u8]).context(BrokenIO)?;
+        self.writer.flush().context(BrokenIO)?;
 
         // 'y' or 'n' with a newline
-        let mut buf = [0; 2];
-        self.0.stdout.unwrap().read_exact(&mut buf)
-            .context(BrokenIO);
+        let mut line = String::new();
+        self.reader.read_line(&mut line)
+            .context(BrokenIO)?;
 
-        ensure!(buf[1] == '\n' as u8, BrokenLogic { reason:
-            format!("unexpected output: {:?} (shoud have newline at the end)", buf)
-        });
-
-        match buf[0].into() {
-            'y' => Ok(true),
-            'n' => Ok(false),
-            x   => Err(Error::BrokenLogic { reason:
+        match line.trim() {
+            "yes" => Ok(true),
+            "no"  => Ok(false),
+            x => Err(Error::BrokenLogic { reason:
                 format!("invalid choice: {:?}. choices are: y/n", x)})
         }
     }

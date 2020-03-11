@@ -1,13 +1,7 @@
-use crate::error::{ BraveOracle, CharLoad, HexParse, InsufficiendChars };
-use crate::{ CmdOracleCtx, CmdOracle, PrioQueue, Messages, ProgressMsg };
+use crate::{ CmdOracleCtx, CmdOracle, PrioQueue, Messages, BlockData };
 use crate::oracle;
 
-use std::sync::mpsc::Sender;
-use std::ffi::OsStr;
-use std::fs;
-
 use snafu::{ Snafu, ResultExt, ensure };
-use futures::future;
 use crossbeam::thread;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -20,7 +14,7 @@ pub enum Error {
 }
 
 #[derive(Debug)]
-struct Dec {
+pub struct Dec {
     pub intermediate: Vec<u8>,
     pub plain: Vec<u8>
 }
@@ -33,13 +27,14 @@ impl Dec {
 
 type DecResult = Result<Dec>;
 
-fn decrypt_blk(blk: &[u8],
+fn decrypt_blk<F>(blk: &[u8],
                last: &[u8],
-               oracle: CmdOracle,
+               mut oracle: CmdOracle,
                chars: &PrioQueue,
-               prog: Sender<Messages>,
+               prog: &F,
                block: usize,
-               is_last: bool) -> DecResult {
+               is_last: bool) -> DecResult
+    where F: Fn(Messages) + Sync + Send {
     let blksz = blk.len();
     let mut intermediate = vec![0; blksz];
     let mut plain = vec![0u8; blksz];
@@ -69,8 +64,7 @@ fn decrypt_blk(blk: &[u8],
         let mut took = 0;
         for (j, b) in chars.iter().enumerate() {
             payload[i] = b ^ (pad ^ last[i]);
-            prog.send(Messages::Prog(ProgressMsg::new(payload[0..blksz].to_vec(), i as u8, block)))
-                .unwrap();
+            prog(Messages::Payload(BlockData::new(payload[0..blksz].to_vec(), i as u8, block)));
             if oracle.request(&payload).context(Oracle)? {
                 intermediate[i] = b ^ last[i];
                 plain[i] = b;
@@ -80,17 +74,20 @@ fn decrypt_blk(blk: &[u8],
             }
         }
         ensure!(took != 255, Tries);
+        prog(Messages::Intermediate(BlockData::new(intermediate.clone(), i as u8, block)));
+        prog(Messages::Plain(BlockData::new(plain.clone(), i as u8, block)));
+        //println!("took {} oracle calls", took);
     }
-    prog.send(Messages::Done()).unwrap();
     Ok(Dec::new(intermediate, plain))
 }
 
-pub fn decrypt(cipher: &[u8],
+pub fn decrypt<F>(cipher: &[u8],
                blksz: u8,
                oracle: &CmdOracleCtx,
-               prog: Sender<Messages>,
+               prog: F,
                chars: &[u8; 256],
-               iv: bool) -> Vec<DecResult> {
+               iv: bool) -> Vec<DecResult>
+    where F: Fn(Messages) + Sync + Send {
 
     let mut blocks = cipher
         .chunks(blksz as usize)
@@ -102,20 +99,19 @@ pub fn decrypt(cipher: &[u8],
         blocks.insert(0, &ivblk);
     }
 
-    let prog = &prog;
     let chars = PrioQueue::new(chars.to_vec());
     thread::scope(|s| {
         let mut handles = Vec::new();
         let blkc = blocks.len();
         let chars = &chars;
+        let prog = &prog;
         for i in 1..blocks.len() {
-            let kek = prog.clone();
             let blk1 = blocks[i];
             let blk0 = blocks[i-1];
             handles.push(s.spawn(move |_| {
                 decrypt_blk(blk1, blk0,
                             oracle.spawn().context(Oracle)?,
-                            chars, kek, i,
+                            chars, prog, i -1,
                             i == blkc -2 && iv)
             }));
         }

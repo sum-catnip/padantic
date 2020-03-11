@@ -1,20 +1,21 @@
-pub struct ProgressMsg {
-    payload: Vec<u8>,
+pub struct BlockData {
+    block: Vec<u8>,
     index: u8,
-    block: usize
+    block_index: usize
 }
 
-impl ProgressMsg {
-    pub fn new(payload: Vec<u8>, index: u8, block: usize) -> Self {
-        ProgressMsg { payload, index, block }
+impl BlockData {
+    pub fn new(block: Vec<u8>, index: u8, block_index: usize) -> Self {
+        BlockData { block, index, block_index }
     }
 
-    pub fn payload(&self) -> &Vec<u8> { &self.payload }
+    pub fn block(&self) -> &Vec<u8> { &self.block }
     pub fn index(&self) -> u8 { self.index }
-    pub fn block(&self) -> usize { self.block }
+    pub fn block_index(&self) -> usize { self.block_index }
 }
 
 pub enum Messages {
-    Prog(ProgressMsg),
-    Done()
+    Payload(BlockData),
+    Intermediate(BlockData),
+    Plain(BlockData)
 }
