@@ -1,9 +1,8 @@
 use std::process::{ Command, Stdio, Child, ChildStdin, ChildStdout };
-use std::io::{ Read, Write, BufReader, BufRead, BufWriter };
-use std::ffi::OsStr;
+use std::io::{ Write, BufReader, BufRead, BufWriter };
 use std::thread;
 
-use snafu::{ Snafu, ResultExt, ensure };
+use snafu::{ Snafu, ResultExt };
 use base64;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -34,6 +33,10 @@ pub struct CmdOracle{
     child: Child,
     writer: BufWriter<ChildStdin>,
     reader: BufReader<ChildStdout>
+}
+
+impl Drop for CmdOracle {
+    fn drop(&mut self) { self.child.kill().unwrap(); }
 }
 
 impl CmdOracle {
@@ -73,7 +76,7 @@ impl CmdOracle {
             "yes" => Ok(true),
             "no"  => Ok(false),
             x => Err(Error::BrokenLogic { reason:
-                format!("invalid choice: {:?}. choices are: y/n", x)})
+                format!("invalid choice: {:?}. choices are: yes/no", x)})
         }
     }
 }

@@ -84,9 +84,9 @@ fn main() {
                 let blocks = Layout::default()
                     .direction(Direction::Horizontal)
                     .margin(1)
-                    .constraints([Constraint::Length((blksz * 2) + 5),
-                                  Constraint::Length((blksz * 2) + 5),
-                                  Constraint::Length((blksz * 3) + 5),
+                    .constraints([Constraint::Length((blksz * 2) + 4),
+                                  Constraint::Length((blksz * 2) + 4),
+                                  Constraint::Length((blksz * 3) + 4),
                                   Constraint::Length(0)]
                                   .as_ref())
                     .split(screen[0]);
