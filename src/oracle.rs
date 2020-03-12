@@ -1,9 +1,12 @@
 use std::process::{ Command, Stdio, Child, ChildStdin, ChildStdout };
 use std::io::{ Write, BufReader, BufRead, BufWriter };
+use std::time::{ Duration, Instant };
 use std::thread;
 
 use snafu::{ Snafu, ResultExt };
 use base64;
+
+use log::trace;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug, Snafu)]
@@ -66,6 +69,7 @@ impl CmdOracle {
     }
 
     pub fn request(&mut self, payload: &[u8]) -> Result<bool> {
+        let now = Instant::now();
         self.writer.write_all(base64::encode(payload).as_bytes()).context(BrokenIO)?;
         self.writer.write(&['\n' as u8]).context(BrokenIO)?;
         self.writer.flush().context(BrokenIO)?;
@@ -75,6 +79,7 @@ impl CmdOracle {
         self.reader.read_line(&mut line)
             .context(BrokenIO)?;
 
+        trace!("oracle took {:?}", now.elapsed());
         match line.trim() {
             "yes" => Ok(true),
             "no"  => Ok(false),

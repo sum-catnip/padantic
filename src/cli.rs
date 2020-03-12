@@ -2,7 +2,6 @@ use crate::error::{ HexParse, CharLoad, InsufficiendChars };
 use crate::Result;
 
 use std::fs;
-use std::sync::Mutex;
 
 use snafu::{ ensure, ResultExt };
 use clap::{
