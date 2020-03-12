@@ -36,7 +36,10 @@ pub struct CmdOracle{
 }
 
 impl Drop for CmdOracle {
-    fn drop(&mut self) { self.child.kill().unwrap(); }
+    fn drop(&mut self) {
+        // kill forcefully, ignore errors
+        let _ = self.child.kill();
+    }
 }
 
 impl CmdOracle {
