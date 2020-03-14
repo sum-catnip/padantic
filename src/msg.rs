@@ -19,3 +19,15 @@ pub enum Messages {
     Intermediate(BlockData),
     Plain(BlockData)
 }
+
+pub fn pyld(block: Vec<u8>, index: u8, block_index: usize) -> Messages {
+    Messages::Payload(BlockData::new(block, index, block_index))
+}
+
+pub fn inter(block: Vec<u8>, index: u8, block_index: usize) -> Messages {
+    Messages::Intermediate(BlockData::new(block, index, block_index))
+}
+
+pub fn plain(block: Vec<u8>, index: u8, block_index: usize) -> Messages {
+    Messages::Plain(BlockData::new(block, index, block_index))
+}

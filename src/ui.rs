@@ -26,12 +26,13 @@ impl<'a> ScreenCtx<'a> {
     pub fn new(blks: u16, blksz: u16) -> Self {
         let mut init_txt: String = vec!['.'; blksz as usize * 2].iter().collect();
         init_txt.push('\n');
+        log::debug!("gui blocks: {}", blks);
 
         let ublks = blks as usize;
         ScreenCtx {
-            pyld_txt: Mutex::new(vec![Text::raw(init_txt.clone()); ublks -1]),
-            inter_txt: Mutex::new(vec![Text::raw(init_txt.clone()); ublks -1]),
-            plain_txt: Mutex::new(vec![Text::raw(init_txt.clone()); ublks -1]),
+            pyld_txt: Mutex::new(vec![Text::raw(init_txt.clone()); ublks]),
+            inter_txt: Mutex::new(vec![Text::raw(init_txt.clone()); ublks]),
+            plain_txt: Mutex::new(vec![Text::raw(init_txt.clone()); ublks]),
             blks, blksz
         }
     }
@@ -40,9 +41,10 @@ impl<'a> ScreenCtx<'a> {
         let now = Instant::now();
         match msg {
             Messages::Payload(p) => {
+                log::debug!("received block: {}", p.block_index());
                 let mut txt = hex::encode(p.block());
                 txt.push('\n');
-                    self.pyld_txt.lock().unwrap()[p.block_index()] = Text::raw(txt);
+                self.pyld_txt.lock().unwrap()[p.block_index()] = Text::raw(txt);
             }
             Messages::Intermediate(i) => {
                 let mut txt = hex::encode(i.block());
@@ -81,7 +83,7 @@ impl<'a> ScreenCtx<'a> {
         let screen = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints([Constraint::Length(self.blks + 2),
+            .constraints([Constraint::Length(self.blks + 4),
                           Constraint::Length(0)]
                           .as_ref())
             .split(f.size());
@@ -99,6 +101,7 @@ impl<'a> ScreenCtx<'a> {
         let pyld_txt;
         let inter_txt;
         let plain_txt;
+        std::thread::sleep(Duration::from_millis(1));
         let now = Instant::now();
         { pyld_txt = self.pyld_txt.lock().unwrap().clone(); }
         { inter_txt = self.inter_txt.lock().unwrap().clone(); }

@@ -40,8 +40,9 @@ pub struct CmdOracle{
 
 impl Drop for CmdOracle {
     fn drop(&mut self) {
+        // TODO hmmmmmm
         // kill forcefully, ignore errors
-        let _ = self.child.kill();
+        self.child.kill().unwrap();
     }
 }
 
@@ -59,7 +60,6 @@ impl CmdOracle {
         thread::spawn(|| {
             BufReader::new(err).lines()
                 .for_each(|l| log::error!("stderr: {}", l.unwrap()));
-
             log::debug!("stderr thread exit");
         });
 
