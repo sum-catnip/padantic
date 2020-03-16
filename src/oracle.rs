@@ -1,6 +1,6 @@
 use std::process::{ Command, Stdio, Child, ChildStdin, ChildStdout };
 use std::io::{ Write, BufReader, BufRead, BufWriter };
-use std::time::{ Duration, Instant };
+use std::time::Instant;
 use std::thread;
 
 use snafu::{ Snafu, ResultExt };

@@ -11,7 +11,7 @@ base64 = "0.11.0"
 clap = "2.33.0"
 snafu = "0.6.2"
 hex = "0.4.2"
-crossterm = "0.14"
+crossterm = "0.16"
 tui = { version = "0.8", default-features = false, features = ['crossterm'] }
 crossbeam = "0.7.3"
 log = "0.4.8"

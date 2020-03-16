@@ -1,9 +1,9 @@
-use crate::Messages;
+use crate::msg::Messages;
 
 use std::sync::Mutex;
 use std::time::{ Duration, Instant };
 
-use tui::terminal::Frame;
+use tui::terminal::{ Terminal, Frame };
 use tui::backend::Backend;
 use tui::widgets::{ Block, Borders, Text, Paragraph, Widget };
 use tui::layout::{ Layout, Alignment, Direction, Constraint };
@@ -18,12 +18,14 @@ pub struct ScreenCtx<'a> {
     pyld_txt: BlkTxt<'a>,
     inter_txt: BlkTxt<'a>,
     plain_txt: BlkTxt<'a>,
+    done: Mutex<bool>,
     blks: u16,
-    blksz: u16
+    blksz: u16,
+    delay_us: u128
 }
 
 impl<'a> ScreenCtx<'a> {
-    pub fn new(blks: u16, blksz: u16) -> Self {
+    pub fn new(blks: u16, blksz: u16, fps: u64) -> Self {
         let mut init_txt: String = vec!['.'; blksz as usize * 2].iter().collect();
         init_txt.push('\n');
         log::debug!("gui blocks: {}", blks);
@@ -33,6 +35,8 @@ impl<'a> ScreenCtx<'a> {
             pyld_txt: Mutex::new(vec![Text::raw(init_txt.clone()); ublks]),
             inter_txt: Mutex::new(vec![Text::raw(init_txt.clone()); ublks]),
             plain_txt: Mutex::new(vec![Text::raw(init_txt.clone()); ublks]),
+            done: Mutex::new(false),
+            delay_us: 1000000 / fps as u128,
             blks, blksz
         }
     }
@@ -61,7 +65,8 @@ impl<'a> ScreenCtx<'a> {
                     .collect::<String>());
                 txt.push('\n');
                 self.plain_txt.lock().unwrap()[p.block_index()] = Text::raw(txt);
-            }
+            },
+            Messages::Done => *self.done.lock().unwrap() = true
         };
         trace!("updating screen ctx took {:?}", now.elapsed());
     }
@@ -75,6 +80,16 @@ impl<'a> ScreenCtx<'a> {
                 },
                 _ => ()
             };
+        }
+    }
+
+    pub fn draw_loop<T: Backend>(&self, term: &mut Terminal<T>) {
+        let mut now = Instant::now();
+        while !{ *self.done.lock().unwrap() } {
+            if now.elapsed().as_micros() > self.delay_us {
+                term.draw(|f| self.draw(f)).unwrap();
+                now = Instant::now();
+            }
         }
     }
 
@@ -101,7 +116,6 @@ impl<'a> ScreenCtx<'a> {
         let pyld_txt;
         let inter_txt;
         let plain_txt;
-        std::thread::sleep(Duration::from_millis(1));
         let now = Instant::now();
         { pyld_txt = self.pyld_txt.lock().unwrap().clone(); }
         { inter_txt = self.inter_txt.lock().unwrap().clone(); }

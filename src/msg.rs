@@ -17,7 +17,8 @@ impl BlockData {
 pub enum Messages {
     Payload(BlockData),
     Intermediate(BlockData),
-    Plain(BlockData)
+    Plain(BlockData),
+    Done
 }
 
 pub fn pyld(block: Vec<u8>, index: u8, block_index: usize) -> Messages {

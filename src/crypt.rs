@@ -1,5 +1,5 @@
-use crate::{ CmdOracleCtx, CmdOracle, PrioQueue, Messages };
-use crate::msg::{ pyld, inter, plain };
+use crate::{ CmdOracleCtx, CmdOracle, PrioQueue };
+use crate::msg::{ Messages, pyld, inter, plain };
 use crate::oracle;
 
 use std::u8;
@@ -161,6 +161,7 @@ pub fn decrypt<F>(cipher: &[u8],
             res.push(handle.join().unwrap())
         }
 
+        (prog)(Messages::Done);
         res
     }).unwrap()
 }

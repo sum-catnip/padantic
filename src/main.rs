@@ -14,14 +14,11 @@ use oracle::{ CmdOracle, CmdOracleCtx };
 use prio::PrioQueue;
 use ui::ScreenCtx;
 
-use msg::{ BlockData, Messages };
-
 use std::io;
 use std::fs::File;
 use std::io::Write;
 
 use crossterm::terminal::{ EnterAlternateScreen, LeaveAlternateScreen, enable_raw_mode };
-use crossterm::event::DisableMouseCapture;
 use crossterm::execute;
 use tui::Terminal;
 use tui::backend::CrosstermBackend;
@@ -35,7 +32,7 @@ fn main() {
 
     let opt = cli::parse();
     let oracle = CmdOracleCtx::new(opt.oracle().to_owned(), opt.oracle_args().to_owned());
-    execute!(io::stdout(), EnterAlternateScreen).unwrap();
+    let _ = execute!(io::stdout(), EnterAlternateScreen);
     //execute!(io::stdout(), DisableMouseCapture).unwrap();
     enable_raw_mode().unwrap();
     let backend = CrosstermBackend::new(io::stdout());
@@ -45,15 +42,14 @@ fn main() {
 
     let blocks = opt.cipher().len() / opt.size() as usize;
     let blksz = opt.size() as u16;
-    let screen = ScreenCtx::new(blocks as u16 -1, blksz);
-    let cb = |msg: Messages| screen.update(msg);
+    let screen = ScreenCtx::new(blocks as u16 -1, blksz, 60);
+    let cb = |msg| screen.update(msg);
     
     term.draw(|f| screen.draw(f)).unwrap();
     thread::scope(|s| {
         s.spawn(|_| crypt::decrypt(opt.cipher(), opt.size(), &oracle, &cb, opt.chars(), opt.iv()));
-        s.spawn(|_| loop { term.draw(|f| screen.draw(f)).unwrap() });
+        s.spawn(|_| screen.draw_loop(&mut term));
     }).unwrap();
 
-    execute!(io::stdout(), LeaveAlternateScreen).unwrap();
-    //t.join().unwrap();
+    let _ = execute!(io::stdout(), LeaveAlternateScreen);
 }
