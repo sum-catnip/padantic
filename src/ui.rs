@@ -7,13 +7,47 @@ use tui::terminal::{ Terminal, Frame };
 use tui::backend::Backend;
 use tui::widgets::{ Block, Borders, Text, Paragraph, Widget };
 use tui::layout::{ Layout, Alignment, Direction, Constraint };
+use tui::style::Style;
 
 use crossterm::event;
 use crossterm::event::{ Event, KeyCode };
 
 use log::trace;
 
-pub type BlkTxt<'a> = Mutex<Vec<Text<'a>>>;
+#[derive(Clone)]
+struct StyledText<'a> {
+    pub done: Text<'a>,
+    pub curr: Text<'a>,
+    pub next: Text<'a>
+}
+
+impl<'a> StyledText<'a> {
+    pub fn new(done: String, curr: String, mut next: String) -> Self {
+        next.push('\n');
+        StyledText {
+            done: Text::raw(done),
+            curr: Text::raw(curr),
+            next: Text::raw(next)
+        }
+    }
+
+    pub fn placeholder(size: u16) -> Self {
+        let mut init: String = vec!['.'; size as usize].iter().collect();
+        init.push('\n');
+        StyledText {
+            done: Text::raw(""),
+            curr: Text::raw(""),
+            next: Text::raw(init)
+        }
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = Text<'a>> {
+        let yeet = [self.done, self.curr, self.next];
+        yeet.iter()
+    }
+}
+
+pub type BlkTxt<'a> = Mutex<Vec<StyledText<'a>>>;
 pub struct ScreenCtx<'a> {
     pyld_txt: BlkTxt<'a>,
     inter_txt: BlkTxt<'a>,
@@ -28,13 +62,12 @@ impl<'a> ScreenCtx<'a> {
     pub fn new(blks: u16, blksz: u16, fps: u64) -> Self {
         let mut init_txt: String = vec!['.'; blksz as usize * 2].iter().collect();
         init_txt.push('\n');
-        log::debug!("gui blocks: {}", blks);
 
         let ublks = blks as usize;
         ScreenCtx {
-            pyld_txt: Mutex::new(vec![Text::raw(init_txt.clone()); ublks]),
-            inter_txt: Mutex::new(vec![Text::raw(init_txt.clone()); ublks]),
-            plain_txt: Mutex::new(vec![Text::raw(init_txt.clone()); ublks]),
+            pyld_txt: Mutex::new(vec![StyledText::placeholder(blksz * 2); ublks]),
+            inter_txt: Mutex::new(vec![StyledText::placeholder(blksz * 2); ublks]),
+            plain_txt: Mutex::new(vec![StyledText::placeholder((blksz * 3) +1); ublks]),
             done: Mutex::new(false),
             delay_us: 1000000 / fps as u128,
             blks, blksz
@@ -45,15 +78,16 @@ impl<'a> ScreenCtx<'a> {
         let now = Instant::now();
         match msg {
             Messages::Payload(p) => {
-                log::debug!("received block: {}", p.block_index());
                 let mut txt = hex::encode(p.block());
                 txt.push('\n');
-                self.pyld_txt.lock().unwrap()[p.block_index()] = Text::raw(txt);
+                let txt = StyledText::new("".to_owned(), "".to_owned(), txt);
+                self.pyld_txt.lock().unwrap()[p.block_index()] = txt;
             }
             Messages::Intermediate(i) => {
                 let mut txt = hex::encode(i.block());
                 txt.push('\n');
-                self.inter_txt.lock().unwrap()[i.block_index()] = Text::raw(txt);
+                let txt = StyledText::new("".to_owned(), "".to_owned(), txt);
+                self.inter_txt.lock().unwrap()[i.block_index()] = txt;
             }
             Messages::Plain(p) => {
                 let mut txt = hex::encode(p.block());
@@ -64,7 +98,8 @@ impl<'a> ScreenCtx<'a> {
                     .map(|c| if c.is_ascii_graphic() { c } else { '.' })
                     .collect::<String>());
                 txt.push('\n');
-                self.plain_txt.lock().unwrap()[p.block_index()] = Text::raw(txt);
+                let txt = StyledText::new("".to_owned(), "".to_owned(), txt);
+                self.plain_txt.lock().unwrap()[p.block_index()] = txt;
             },
             Messages::Done => *self.done.lock().unwrap() = true
         };
@@ -123,15 +158,15 @@ impl<'a> ScreenCtx<'a> {
         trace!("copying states took {:?}", now.elapsed());
 
         let now = Instant::now();
-        Paragraph::new(pyld_txt.iter())
+        Paragraph::new(pyld_txt.iter().flat_map(|s| [s.done, s.curr, s.next].into_iter()))
             .alignment(Alignment::Center)
             .block(Block::default().title("payload").borders(Borders::ALL))
             .render(&mut f, blocks[0]);
-        Paragraph::new(inter_txt.iter())
+        Paragraph::new(inter_txt.iter().flat_map(|s| [s.done, s.curr, s.next].iter()))
             .alignment(Alignment::Center)
             .block(Block::default().title("intermediate").borders(Borders::ALL))
             .render(&mut f, blocks[1]);
-        Paragraph::new(plain_txt.iter())
+        Paragraph::new(plain_txt.iter().flat_map(|s| [s.done, s.curr, s.next].iter()))
             .alignment(Alignment::Center)
             .block(Block::default().title("plain").borders(Borders::ALL))
             .render(&mut f, blocks[2]);

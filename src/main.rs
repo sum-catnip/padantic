@@ -33,7 +33,6 @@ fn main() {
     let opt = cli::parse();
     let oracle = CmdOracleCtx::new(opt.oracle().to_owned(), opt.oracle_args().to_owned());
     let _ = execute!(io::stdout(), EnterAlternateScreen);
-    //execute!(io::stdout(), DisableMouseCapture).unwrap();
     enable_raw_mode().unwrap();
     let backend = CrosstermBackend::new(io::stdout());
     let mut term = Terminal::new(backend).unwrap();
@@ -42,7 +41,7 @@ fn main() {
 
     let blocks = opt.cipher().len() / opt.size() as usize;
     let blksz = opt.size() as u16;
-    let screen = ScreenCtx::new(blocks as u16 -1, blksz, 60);
+    let screen = ScreenCtx::new(blocks as u16 -1, blksz, 120);
     let cb = |msg| screen.update(msg);
     
     term.draw(|f| screen.draw(f)).unwrap();
