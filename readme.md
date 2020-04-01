@@ -1,5 +1,11 @@
-﻿# Padantic
-CLI tool for exploiting ALL sorts of padding oracles.
+# Padantic
+fast as fuck CLI tool for exploiting ALL sorts of padding oracles.
+
+## Optimizations
+
+- Block level multithreading
+- Guesses follow a priority list which is initialized to english letter frequencies and automatically readjusted as new bytes get found
+- Last PAD bytes take a maximum of BLOCKSIZE tries
 
 ## Usage
 The oracle - in this case - is actually a command you supply,
@@ -68,3 +74,10 @@ instead of just `padantic`
 ## Look how pretty it looks
 ill need to update this gif someday since ive added colors to padantic but anyways, enjoy this gif:
 ![animated gif](https://cdn.discordapp.com/attachments/567308861640540210/687588463721447470/speed-oracle.gif)
+
+
+## Tricks
+- The -noiv tags gets you the first blocks intermediate bytes so you can recover the IV if you guess the first blocks plaintext by simple XOR'ing them
+- Consider adding a random delay (and useragent) to your oracle
+- The -O tag is optional but its very usefull to have the results stored in a file
+- If you need to debug your oracle, write to stderr and use the --log switch to generate a logfile. The logfile will contain every stderr output
