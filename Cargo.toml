@@ -3,6 +3,10 @@ name = "padantic"
 version = "0.1.0"
 authors = ["catnip <catnip@catnip.fyi>"]
 edition = "2018"
+description = "fast as fuck CLI tool for exploiting ALL sorts of padding oracles"
+readme = "readme.md"
+repository = "https://github.com/sum-catnip/padantic"
+license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
