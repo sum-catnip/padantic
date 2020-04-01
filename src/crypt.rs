@@ -6,6 +6,7 @@ use std::u8;
 
 use snafu::{ Snafu, ResultExt, ensure };
 use crossbeam::thread;
+use crossbeam::thread::ScopedJoinHandle;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug, Snafu)]
@@ -103,7 +104,7 @@ impl<'a, F: ProgressCb> BlockDecypt<'a, F> {
             },
             false => Ok(self.blksz)
         }
-    } // TODO ech
+    }
 
     pub fn decrypt(mut self) -> DecResult {
         for i in (0 .. self.skip_pad()?).rev() {
@@ -120,7 +121,6 @@ impl<'a, F: ProgressCb> BlockDecypt<'a, F> {
     }
 }
 
-// TODO ech
 pub fn decrypt<F>(cipher: &[u8],
                   blksz: u8,
                   oracle: &CmdOracleCtx,
@@ -140,29 +140,25 @@ pub fn decrypt<F>(cipher: &[u8],
     }
 
     let chars = PrioQueue::new(chars.to_vec());
-    thread::scope(|s| {
-        let mut handles = Vec::new();
+    let res = thread::scope(|s| {
         let blkc = blocks.len();
-        
         let chars = &chars;
         let prog = &prog;
-        for i in 1..blocks.len() {
-            let blk1 = blocks[i];
-            let blk0 = blocks[i-1];
-            handles.push(s.spawn(move |_| {
-                BlockDecypt::new(blk1, blk0,
-                                 oracle.spawn().context(Oracle)?,
-                                 chars, prog, i -1,
-                                 i == blkc -1 && iv)?
-                                 .decrypt()
-            }));
-        }
-        let mut res = Vec::new();
-        for handle in handles {
-            res.push(handle.join().unwrap())
-        }
-
-        (prog)(Messages::Done);
-        res
-    }).unwrap()
+        (1..blocks.len())
+            .map(|i| {
+                let blk1 = blocks[i];
+                let blk0 = blocks[i-1];
+                s.spawn(move |_|
+                    BlockDecypt::new(blk1, blk0,
+                                     oracle.spawn().context(Oracle)?,
+                                     chars, prog, i -1,
+                                     i == blkc -1 && (iv || blkc > 2))?
+                                     .decrypt())})
+            .collect::<Vec<ScopedJoinHandle<_>>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect()
+    }).unwrap();
+    (prog)(Messages::Done);
+    res
 }

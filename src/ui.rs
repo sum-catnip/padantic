@@ -11,7 +11,7 @@ use tui::layout::{ Layout, Alignment, Direction, Constraint };
 use tui::style::{ Color, Style };
 
 use crossterm::event;
-use crossterm::event::{ Event, KeyCode };
+use crossterm::event::{ Event, KeyCode, KeyModifiers };
 
 use log::trace;
 
@@ -87,7 +87,8 @@ impl<'a> ScreenCtx<'a> {
         if event::poll(Duration::from_secs(0)).unwrap() {
             match event::read().unwrap() {
                 Event::Key(e) => match e.code {
-                    KeyCode::Esc => std::process::exit(0),
+                    KeyCode::Char('c') if e.modifiers.contains(KeyModifiers::CONTROL) =>
+                        std::process::exit(0),
                     _ => ()
                 },
                 _ => ()
