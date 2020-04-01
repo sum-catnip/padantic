@@ -2,52 +2,20 @@ use crate::msg::Messages;
 
 use std::sync::Mutex;
 use std::time::{ Duration, Instant };
+use std::thread;
 
 use tui::terminal::{ Terminal, Frame };
 use tui::backend::Backend;
 use tui::widgets::{ Block, Borders, Text, Paragraph, Widget };
 use tui::layout::{ Layout, Alignment, Direction, Constraint };
-use tui::style::Style;
+use tui::style::{ Color, Style };
 
 use crossterm::event;
 use crossterm::event::{ Event, KeyCode };
 
 use log::trace;
 
-#[derive(Clone)]
-struct StyledText<'a> {
-    pub done: Text<'a>,
-    pub curr: Text<'a>,
-    pub next: Text<'a>
-}
-
-impl<'a> StyledText<'a> {
-    pub fn new(done: String, curr: String, mut next: String) -> Self {
-        next.push('\n');
-        StyledText {
-            done: Text::raw(done),
-            curr: Text::raw(curr),
-            next: Text::raw(next)
-        }
-    }
-
-    pub fn placeholder(size: u16) -> Self {
-        let mut init: String = vec!['.'; size as usize].iter().collect();
-        init.push('\n');
-        StyledText {
-            done: Text::raw(""),
-            curr: Text::raw(""),
-            next: Text::raw(init)
-        }
-    }
-
-    pub fn iter(self) -> impl Iterator<Item = Text<'a>> {
-        let yeet = [self.done, self.curr, self.next];
-        yeet.iter()
-    }
-}
-
-pub type BlkTxt<'a> = Mutex<Vec<StyledText<'a>>>;
+pub type BlkTxt<'a> = Mutex<Vec<Vec<Text<'a>>>>;
 pub struct ScreenCtx<'a> {
     pyld_txt: BlkTxt<'a>,
     inter_txt: BlkTxt<'a>,
@@ -55,21 +23,36 @@ pub struct ScreenCtx<'a> {
     done: Mutex<bool>,
     blks: u16,
     blksz: u16,
-    delay_us: u128
+}
+
+fn stylize_hex<'a>(blk: &Vec<u8>, i: usize, blki: usize, lst: &BlkTxt<'a>) {
+    let next = hex::encode(&blk[0..i]);
+    let next = Text::styled(next, Style::default().fg(Color::LightRed));
+
+    let curr = hex::encode(&blk[i..i +1]);
+    let curr = Text::styled(curr, Style::default().fg(Color::LightCyan));
+
+    let done = hex::encode(&blk[i..blk.len() -1]);
+    let done = Text::styled(done, Style::default().fg(Color::LightGreen));
+
+    let mut lst = lst.lock().unwrap();
+    lst[blki][0] = next;
+    lst[blki][1] = curr;
+    lst[blki][2] = done;
+    lst[blki][3] = Text::raw("\n");
 }
 
 impl<'a> ScreenCtx<'a> {
-    pub fn new(blks: u16, blksz: u16, fps: u64) -> Self {
+    pub fn new(blks: u16, blksz: u16) -> Self {
         let mut init_txt: String = vec!['.'; blksz as usize * 2].iter().collect();
         init_txt.push('\n');
 
-        let ublks = blks as usize;
+        let init = vec![vec![Text::raw(init_txt), Text::raw(""), Text::raw(""), Text::raw("")]; blks as usize];
         ScreenCtx {
-            pyld_txt: Mutex::new(vec![StyledText::placeholder(blksz * 2); ublks]),
-            inter_txt: Mutex::new(vec![StyledText::placeholder(blksz * 2); ublks]),
-            plain_txt: Mutex::new(vec![StyledText::placeholder((blksz * 3) +1); ublks]),
+            pyld_txt: Mutex::new(init.clone()),
+            inter_txt: Mutex::new(init.clone()),
+            plain_txt: Mutex::new(init.clone()),
             done: Mutex::new(false),
-            delay_us: 1000000 / fps as u128,
             blks, blksz
         }
     }
@@ -77,29 +60,23 @@ impl<'a> ScreenCtx<'a> {
     pub fn update(&self, msg: Messages) {
         let now = Instant::now();
         match msg {
-            Messages::Payload(p) => {
-                let mut txt = hex::encode(p.block());
-                txt.push('\n');
-                let txt = StyledText::new("".to_owned(), "".to_owned(), txt);
-                self.pyld_txt.lock().unwrap()[p.block_index()] = txt;
-            }
-            Messages::Intermediate(i) => {
-                let mut txt = hex::encode(i.block());
-                txt.push('\n');
-                let txt = StyledText::new("".to_owned(), "".to_owned(), txt);
-                self.inter_txt.lock().unwrap()[i.block_index()] = txt;
-            }
+            Messages::Payload(p) =>
+                stylize_hex(p.block(), p.index() as usize, p.block_index(), &self.pyld_txt),
+
+            Messages::Intermediate(i) =>
+                stylize_hex(i.block(), i.index() as usize, i.block_index(), &self.inter_txt),
+
             Messages::Plain(p) => {
-                let mut txt = hex::encode(p.block());
-                txt.push(' ');
+                let mut txt = " ".to_owned();
                 txt.push_str(&p.block()
                     .iter()
                     .map(|b| char::from(*b))
                     .map(|c| if c.is_ascii_graphic() { c } else { '.' })
                     .collect::<String>());
                 txt.push('\n');
-                let txt = StyledText::new("".to_owned(), "".to_owned(), txt);
-                self.plain_txt.lock().unwrap()[p.block_index()] = txt;
+                let txt = Text::raw(txt);
+                stylize_hex(p.block(), p.index() as usize, p.block_index(), &self.plain_txt);
+                self.plain_txt.lock().unwrap()[p.block_index()][3] = txt;
             },
             Messages::Done => *self.done.lock().unwrap() = true
         };
@@ -119,12 +96,9 @@ impl<'a> ScreenCtx<'a> {
     }
 
     pub fn draw_loop<T: Backend>(&self, term: &mut Terminal<T>) {
-        let mut now = Instant::now();
         while !{ *self.done.lock().unwrap() } {
-            if now.elapsed().as_micros() > self.delay_us {
-                term.draw(|f| self.draw(f)).unwrap();
-                now = Instant::now();
-            }
+            term.draw(|f| self.draw(f)).unwrap();
+            thread::sleep(Duration::from_millis(10));
         }
     }
 
@@ -158,15 +132,15 @@ impl<'a> ScreenCtx<'a> {
         trace!("copying states took {:?}", now.elapsed());
 
         let now = Instant::now();
-        Paragraph::new(pyld_txt.iter().flat_map(|s| [s.done, s.curr, s.next].into_iter()))
+        Paragraph::new(pyld_txt.iter().flatten())
             .alignment(Alignment::Center)
             .block(Block::default().title("payload").borders(Borders::ALL))
             .render(&mut f, blocks[0]);
-        Paragraph::new(inter_txt.iter().flat_map(|s| [s.done, s.curr, s.next].iter()))
+        Paragraph::new(inter_txt.iter().flatten())
             .alignment(Alignment::Center)
             .block(Block::default().title("intermediate").borders(Borders::ALL))
             .render(&mut f, blocks[1]);
-        Paragraph::new(plain_txt.iter().flat_map(|s| [s.done, s.curr, s.next].iter()))
+        Paragraph::new(plain_txt.iter().flatten())
             .alignment(Alignment::Center)
             .block(Block::default().title("plain").borders(Borders::ALL))
             .render(&mut f, blocks[2]);

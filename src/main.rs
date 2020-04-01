@@ -41,7 +41,7 @@ fn main() {
 
     let blocks = opt.cipher().len() / opt.size() as usize;
     let blksz = opt.size() as u16;
-    let screen = ScreenCtx::new(blocks as u16 -1, blksz, 120);
+    let screen = ScreenCtx::new(blocks as u16 -1, blksz);
     let cb = |msg| screen.update(msg);
     
     term.draw(|f| screen.draw(f)).unwrap();

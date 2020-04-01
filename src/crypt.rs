@@ -46,6 +46,7 @@ struct BlockDecypt<'a, F: ProgressCb> {
     cb: &'a F
 }
 
+// yes, thats how lazy i am
 macro_rules! i { ($x:expr) => { $x as usize }; }
 
 impl<'a, F: ProgressCb> BlockDecypt<'a, F> {
