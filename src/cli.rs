@@ -90,9 +90,9 @@ pub fn parse() -> Options {
             .help(concat!("target file for logging output. ",
                           "log will contain stderr output from the oracle.")))
         .arg(Arg::with_name("loglevel")
-            .short("v").multiple(true))
+            .short("v").multiple(true)
             .help(concat!("use multiple times to increase log level. ex: -vv for `info`. ",
-                          "1 is the default so errors are always logged"))
+                          "1 is the default so errors are always logged")))
         .get_matches();
 
     let cipher = hex::decode(args.value_of("cipher").unwrap())
