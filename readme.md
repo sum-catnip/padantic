@@ -1,5 +1,5 @@
 # Padantic
-fast as fuck CLI tool for exploiting ALL sorts of padding oracles.
+Fast as fuck CLI tool for exploiting ALL sorts of padding oracles.
 
 ## Optimizations
 
@@ -66,13 +66,13 @@ ARGS:
 ## Installation
 > cargo install padantic
 
-To run it youll either have to have the cargo bin directory in your path (recommended) or write
+To run it you must have the cargo bin directory in your path (recommended) or write
 > cargo run padantic
 
 instead of just `padantic`
 
 ## Look how pretty it looks
-ill need to update this gif someday since ive added colors to padantic but anyways, enjoy this gif:
+I'll need to update this gif someday since ive added colors to padantic but anyways, enjoy this gif:
 ![animated gif](https://cdn.discordapp.com/attachments/567308861640540210/687588463721447470/speed-oracle.gif)
 
 
